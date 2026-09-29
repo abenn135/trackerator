@@ -1,0 +1,181 @@
+package main
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	_ "modernc.org/sqlite"
+)
+
+type task struct {
+	ID       int64
+	ParentID sql.NullInt64
+	Title    string
+	Status   string
+	Created  string
+}
+
+type store struct {
+	db *sql.DB
+}
+
+func openStore(home string) (*store, error) {
+	dir := filepath.Join(home, ".trackerator")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create data directory: %w", err)
+	}
+	path := filepath.Join(dir, "trackerator.db")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("create database file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close database file: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	// SQLite pragmas apply per connection. One connection keeps foreign keys enabled.
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"PRAGMA foreign_keys = ON",
+		"PRAGMA busy_timeout = 5000",
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			parent_id INTEGER REFERENCES tasks(id),
+			title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+			status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'started', 'blocked', 'done')),
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS tasks_parent_id ON tasks(parent_id)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize database: %w", err)
+		}
+	}
+	if err := migrateStatus(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	return &store{db: db}, nil
+}
+
+func migrateStatus(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(tasks)")
+	if err != nil {
+		return err
+	}
+	hasStatus := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "status" {
+			hasStatus = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasStatus {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'started', 'blocked', 'done'))")
+	return err
+}
+
+func (s *store) close() error { return s.db.Close() }
+
+func (s *store) add(title string, parentID *int64) (int64, error) {
+	if parentID != nil {
+		if _, err := s.get(*parentID); err != nil {
+			return 0, err
+		}
+	}
+	result, err := s.db.Exec("INSERT INTO tasks (parent_id, title) VALUES (?, ?)", parentID, title)
+	if err != nil {
+		return 0, fmt.Errorf("add task: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+func (s *store) get(id int64) (task, error) {
+	var t task
+	err := s.db.QueryRow("SELECT id, parent_id, title, status, created_at FROM tasks WHERE id = ?", id).
+		Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.Created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return task{}, fmt.Errorf("task %d not found", id)
+	}
+	if err != nil {
+		return task{}, fmt.Errorf("get task: %w", err)
+	}
+	return t, nil
+}
+
+func (s *store) setStatus(id int64, status string) error {
+	result, err := s.db.Exec("UPDATE tasks SET status = ? WHERE id = ?", status, id)
+	if err != nil {
+		return fmt.Errorf("update task status: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update task status: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("task %d not found", id)
+	}
+	return nil
+}
+
+func (s *store) list(parentID *int64, query *string, includeDone bool) ([]task, error) {
+	statement := "SELECT id, parent_id, title, status, created_at FROM tasks"
+	var conditions []string
+	var args []any
+	if parentID != nil {
+		conditions = append(conditions, "parent_id = ?")
+		args = append(args, *parentID)
+	}
+	if query != nil {
+		conditions = append(conditions, "instr(lower(title), lower(?)) > 0")
+		args = append(args, *query)
+	}
+	if !includeDone {
+		conditions = append(conditions, "status != 'done'")
+	}
+	if len(conditions) > 0 {
+		statement += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	statement += " ORDER BY id"
+	rows, err := s.db.Query(statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	defer rows.Close()
+	var tasks []task
+	for rows.Next() {
+		var t task
+		if err := rows.Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.Created); err != nil {
+			return nil, fmt.Errorf("read task: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	return tasks, nil
+}
