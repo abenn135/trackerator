@@ -66,6 +66,8 @@ func TestHelpTopics(t *testing.T) {
 		{[]string{"help", "done"}, "Alias for \"complete\""},
 		{[]string{"help", "serve"}, "local web interface"},
 		{[]string{"help", "schedule"}, "YYYY-MM-DD"},
+		{[]string{"help", "url"}, "one or more HTTP(S) URLs"},
+		{[]string{"help", "url", "add"}, "trackerator url add ID URL"},
 		{[]string{"help", "list"}, "List all tasks in ID order"},
 		{[]string{"help", "show"}, "including completed subtasks"},
 		{[]string{"help", "search"}, "ignoring letter case"},
@@ -90,6 +92,56 @@ func TestHelpTopics(t *testing.T) {
 	err := run([]string{"help", "missing"}, &out, func() (string, error) { return "", nil })
 	if err == nil || !strings.Contains(err.Error(), "unknown help topic") {
 		t.Fatalf("unknown topic error = %v", err)
+	}
+}
+
+func TestTaskURLsThroughCLI(t *testing.T) {
+	home := t.TempDir()
+	runCommand := func(args ...string) (string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		err := run(args, &out, func() (string, error) { return home, nil })
+		return out.String(), err
+	}
+	for _, args := range [][]string{{"add", "Parent"}, {"subtask", "add", "1", "Child"}} {
+		if _, err := runCommand(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := "https://example.com/review?a=1&b=2"
+	second := "http://example.org/docs"
+	for _, args := range [][]string{{"url", "add", "1", first}, {"url", "add", "1", second}, {"url", "add", "2", first}} {
+		if _, err := runCommand(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := runCommand("url", "list", "1"); err != nil || got != first+"\n"+second+"\n" {
+		t.Fatalf("URL list = %q, error %v", got, err)
+	}
+	if got, err := runCommand("show", "2"); err != nil || !strings.Contains(got, "URLs:\n  "+first+"\n") {
+		t.Fatalf("subtask URLs in show = %q, error %v", got, err)
+	}
+	for _, args := range [][]string{
+		{"url", "add", "1", first},
+		{"url", "add", "1", "javascript:alert(1)"},
+		{"url", "add", "1", "https://user:pass@example.com"},
+		{"url", "add", "999", first},
+	} {
+		if _, err := runCommand(args...); err == nil {
+			t.Fatalf("expected error for %v", args)
+		}
+	}
+	if _, err := runCommand("url", "remove", "1", first); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := runCommand("url", "list", "1"); err != nil || got != second+"\n" {
+		t.Fatalf("URLs after removal = %q, error %v", got, err)
+	}
+	if got, err := runCommand("url", "list", "2"); err != nil || got != first+"\n" {
+		t.Fatalf("subtask URLs after parent removal = %q, error %v", got, err)
+	}
+	if _, err := runCommand("url", "remove", "1", first); err == nil {
+		t.Fatal("expected error removing an absent URL")
 	}
 }
 
@@ -191,6 +243,10 @@ func TestExistingDatabaseGetsTodoStatus(t *testing.T) {
 	out.Reset()
 	if err := run([]string{"schedule", "1", "--start", "2026-01-02"}, &out, func() (string, error) { return home, nil }); err != nil {
 		t.Fatalf("schedule migrated task: %v", err)
+	}
+	out.Reset()
+	if err := run([]string{"url", "add", "1", "https://example.com/legacy"}, &out, func() (string, error) { return home, nil }); err != nil {
+		t.Fatalf("add URL to migrated task: %v", err)
 	}
 }
 

@@ -17,6 +17,9 @@ const usage = `Usage:
   trackerator complete ID
   trackerator done ID
   trackerator schedule ID [--start DATE|none] [--complete DATE|none]
+  trackerator url add ID URL
+  trackerator url remove ID URL
+  trackerator url list ID
   trackerator list [-a]
   trackerator show ID
   trackerator search QUERY
@@ -72,9 +75,18 @@ stay unchanged. Provide at least one option. The completion date cannot be
 before the start date.
 
 Example: trackerator schedule 1 --start 2026-10-01 --complete 2026-10-05`,
+	"url": `Usage:
+  trackerator url add ID URL
+  trackerator url remove ID URL
+  trackerator url list ID
+
+Associate one or more HTTP(S) URLs with a task or subtask. Add and remove
+operate on the exact URL; list displays all URLs for the task.
+
+Example: trackerator url add 1 https://example.com/review/42`,
 	"show": `Usage: trackerator show ID
 
-Show a task's title, status, scheduled dates, creation time, parent (if any),
+Show a task's title, status, scheduled dates, URLs, creation time, parent (if any),
 and immediate subtasks, including completed subtasks.
 
 Example: trackerator show 1`,
@@ -93,7 +105,7 @@ Example: trackerator serve -port 8081`,
 	"help": `Usage: trackerator help [COMMAND]
 
 Show the command overview, or detailed help for add, subtask, list, show,
-search, start, block, complete, done, schedule, serve, or help.
+search, start, block, complete, done, schedule, url, serve, or help.
 
 Example: trackerator help add`,
 }
@@ -121,6 +133,7 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 	var id int64
 	var includeDone bool
 	var scheduleStart, scheduleCompletion *string
+	var urlAction, taskURL string
 	port := 8080
 	switch args[0] {
 	case "add", "search":
@@ -186,6 +199,25 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 				return fmt.Errorf("unknown schedule option %q", args[i])
 			}
 		}
+	case "url":
+		if len(args) < 3 {
+			return errors.New(usage)
+		}
+		urlAction = args[1]
+		if (urlAction == "list" && len(args) != 3) ||
+			((urlAction == "add" || urlAction == "remove") && len(args) != 4) ||
+			(urlAction != "list" && urlAction != "add" && urlAction != "remove") {
+			return errors.New(usage)
+		}
+		command = "url"
+		var err error
+		id, err = parseID(args[2])
+		if err != nil {
+			return err
+		}
+		if len(args) == 4 {
+			taskURL = args[3]
+		}
 	case "show", "start", "block", "complete", "done":
 		if len(args) != 2 {
 			return errors.New(usage)
@@ -244,6 +276,31 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 			return err
 		}
 		fmt.Fprintf(out, "Updated schedule for task %d.\n", id)
+	case "url":
+		switch urlAction {
+		case "add":
+			if err := s.addURL(id, taskURL); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Added URL to task %d: %s\n", id, strings.TrimSpace(taskURL))
+		case "remove":
+			if err := s.removeURL(id, taskURL); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Removed URL from task %d: %s\n", id, strings.TrimSpace(taskURL))
+		case "list":
+			links, err := s.urls(id)
+			if err != nil {
+				return err
+			}
+			if len(links) == 0 {
+				fmt.Fprintf(out, "No URLs for task %d.\n", id)
+			} else {
+				for _, link := range links {
+					fmt.Fprintln(out, link)
+				}
+			}
+		}
 	case "list":
 		tasks, err := s.list(nil, nil, includeDone)
 		if err != nil {
@@ -271,6 +328,16 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 		}
 		if t.ParentID.Valid {
 			fmt.Fprintf(out, "Parent: %d\n", t.ParentID.Int64)
+		}
+		links, err := s.urls(id)
+		if err != nil {
+			return err
+		}
+		if len(links) > 0 {
+			fmt.Fprintln(out, "URLs:")
+			for _, link := range links {
+				fmt.Fprintf(out, "  %s\n", link)
+			}
 		}
 		fmt.Fprintf(out, "Created: %s UTC\n", t.Created)
 		children, err := s.list(&id, nil, true)
@@ -301,6 +368,9 @@ func printHelp(out io.Writer, topics []string) error {
 	topic := strings.Join(topics, " ")
 	if topic == "subtask add" {
 		topic = "subtask"
+	}
+	if topic == "url add" || topic == "url remove" || topic == "url list" {
+		topic = "url"
 	}
 	help, ok := commandHelp[topic]
 	if !ok {

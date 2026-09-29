@@ -2,13 +2,19 @@
 <article class="task{{if .ContextOnly}} context{{end}}" id="task-{{.Task.ID}}">
   <div class="task-top">
     <div>
-      <h3 class="task-title"><span class="task-id">#{{.Task.ID}}</span>{{.Task.Title}}</h3>
+      <h3 class="task-title"><a class="task-id" href="/tasks/{{.Task.ID}}" aria-label="Stable link to task {{.Task.ID}}">#{{.Task.ID}}</a>{{.Task.Title}}</h3>
       <p class="meta">{{if .Task.ParentID.Valid}}Subtask of #{{.Task.ParentID.Int64}} · {{end}}{{if .ContextOnly}}Parent context · {{end}}Created {{.Task.Created}} UTC</p>
+      {{if .HiddenPeers}}<p class="peer-hint">{{.HiddenPeers}} other {{if eq .HiddenPeers 1}}subtask{{else}}subtasks{{end}} not shown. <a href="/tasks/{{.Task.ID}}">View all subtasks of #{{.Task.ID}}</a>.</p>{{end}}
       {{if or .Task.StartDate.Valid .Task.CompletionDate.Valid}}
       <div class="date-tags">
         {{if .Task.StartDate.Valid}}<span class="date-tag{{if .StartDue}} due{{end}}">Start {{.Task.StartDate.String}}{{if .StartDue}} · due now{{end}}</span>{{end}}
         {{if .Task.CompletionDate.Valid}}<span class="date-tag{{if .CompletionDue}} due{{end}}">Complete by {{.Task.CompletionDate.String}}{{if .CompletionDue}} · due now{{end}}</span>{{end}}
       </div>
+      {{end}}
+      {{if .URLs}}
+      <ul class="task-urls" aria-label="URLs for task {{.Task.ID}}">
+        {{range .URLs}}<li><a href="{{.}}" target="_blank" rel="noopener noreferrer">{{.}}</a>{{if not $.ContextOnly}}<form method="post" action="/tasks/url"><input type="hidden" name="csrf" value="{{$.Token}}"><input type="hidden" name="id" value="{{$.Task.ID}}"><input type="hidden" name="action" value="remove"><input type="hidden" name="url" value="{{.}}"><input type="hidden" name="q" value="{{$.Query}}">{{if $.ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if $.ViewID}}<input type="hidden" name="view_id" value="{{$.ViewID}}">{{end}}<button type="submit" class="remove-url" aria-label="Remove URL {{.}} from task {{$.Task.ID}}">Remove</button></form>{{end}}</li>{{end}}
+      </ul>
       {{end}}
     </div>
     <span class="status status-{{.Task.Status}}">{{.Task.Status}}</span>
@@ -16,29 +22,30 @@
   {{if not .ContextOnly}}
   <div class="actions" aria-label="Change status of task {{.Task.ID}}">
     <form method="post" action="/tasks/status">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="todo"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="todo"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <button type="submit" {{if eq .Task.Status "todo"}}disabled{{end}}>To do</button>
     </form>
     <form method="post" action="/tasks/status">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="started"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="started"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <button type="submit" {{if eq .Task.Status "started"}}disabled{{end}}>Start</button>
     </form>
     <form method="post" action="/tasks/status">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="blocked"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="blocked"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <button type="submit" {{if eq .Task.Status "blocked"}}disabled{{end}}>Block</button>
     </form>
     <form method="post" action="/tasks/status">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="done"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="done"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <button type="submit" {{if eq .Task.Status "done"}}disabled{{end}}>Complete</button>
     </form>
   </div>
   <div class="reveal-actions">
     <button type="button" class="reveal-button" data-reveal-target="add-subtask-{{.Task.ID}}" aria-controls="add-subtask-{{.Task.ID}}" aria-expanded="false">Add subtask</button>
     <button type="button" class="reveal-button" data-reveal-target="schedule-{{.Task.ID}}" aria-controls="schedule-{{.Task.ID}}" aria-expanded="false">Schedule dates</button>
+    <button type="button" class="reveal-button" data-reveal-target="add-url-{{.Task.ID}}" aria-controls="add-url-{{.Task.ID}}" aria-expanded="false">Add URL</button>
   </div>
   <div class="reveal-panel" id="add-subtask-{{.Task.ID}}" hidden>
     <form method="post" action="/tasks">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="parent_id" value="{{.Task.ID}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="parent_id" value="{{.Task.ID}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <div class="inline-form">
         <label class="sr-only" for="subtask-{{.Task.ID}}">New subtask under task {{.Task.ID}}</label>
         <input id="subtask-{{.Task.ID}}" type="text" name="title" placeholder="New subtask title" required>
@@ -52,10 +59,20 @@
   </div>
   <div class="reveal-panel" id="schedule-{{.Task.ID}}" hidden>
     <form method="post" action="/tasks/schedule" class="schedule-form">
-      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
       <label>Start date<input type="date" name="start_date" value="{{.Task.StartDate.String}}"></label>
       <label>Completion date<input type="date" name="completion_date" value="{{.Task.CompletionDate.String}}"></label>
       <button type="submit" class="primary">Save dates</button>
+    </form>
+  </div>
+  <div class="reveal-panel" id="add-url-{{.Task.ID}}" hidden>
+    <form method="post" action="/tasks/url">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="action" value="add"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
+      <div class="inline-form">
+        <label class="sr-only" for="url-{{.Task.ID}}">URL for task {{.Task.ID}}</label>
+        <input id="url-{{.Task.ID}}" type="url" name="url" placeholder="https://example.com" required>
+        <button type="submit" class="primary">Add URL</button>
+      </div>
     </form>
   </div>
   {{end}}

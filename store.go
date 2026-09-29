@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -58,6 +60,11 @@ func openStore(home string) (*store, error) {
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS tasks_parent_id ON tasks(parent_id)",
+		`CREATE TABLE IF NOT EXISTS task_urls (
+			task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			url TEXT NOT NULL,
+			PRIMARY KEY (task_id, url)
+		)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			db.Close()
@@ -205,6 +212,99 @@ func (s *store) setStatus(id int64, status string) error {
 		return fmt.Errorf("task %d not found", id)
 	}
 	return nil
+}
+
+func validateTaskURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return "", fmt.Errorf("invalid URL %q: expected an absolute http or https URL", raw)
+	}
+	return value, nil
+}
+
+func (s *store) addURL(id int64, raw string) error {
+	value, err := validateTaskURL(raw)
+	if err != nil {
+		return err
+	}
+	if _, err := s.get(id); err != nil {
+		return err
+	}
+	result, err := s.db.Exec("INSERT OR IGNORE INTO task_urls (task_id, url) VALUES (?, ?)", id, value)
+	if err != nil {
+		return fmt.Errorf("add task URL: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("add task URL: %w", err)
+	} else if count == 0 {
+		return fmt.Errorf("URL already associated with task %d", id)
+	}
+	return nil
+}
+
+func (s *store) removeURL(id int64, raw string) error {
+	value, err := validateTaskURL(raw)
+	if err != nil {
+		return err
+	}
+	if _, err := s.get(id); err != nil {
+		return err
+	}
+	result, err := s.db.Exec("DELETE FROM task_urls WHERE task_id = ? AND url = ?", id, value)
+	if err != nil {
+		return fmt.Errorf("remove task URL: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("remove task URL: %w", err)
+	} else if count == 0 {
+		return fmt.Errorf("URL not associated with task %d", id)
+	}
+	return nil
+}
+
+func (s *store) urls(id int64) ([]string, error) {
+	if _, err := s.get(id); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query("SELECT url FROM task_urls WHERE task_id = ? ORDER BY rowid", id)
+	if err != nil {
+		return nil, fmt.Errorf("list task URLs: %w", err)
+	}
+	defer rows.Close()
+	var links []string
+	for rows.Next() {
+		var link string
+		if err := rows.Scan(&link); err != nil {
+			return nil, fmt.Errorf("read task URL: %w", err)
+		}
+		links = append(links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list task URLs: %w", err)
+	}
+	return links, nil
+}
+
+func (s *store) allURLs() (map[int64][]string, error) {
+	rows, err := s.db.Query("SELECT task_id, url FROM task_urls ORDER BY rowid")
+	if err != nil {
+		return nil, fmt.Errorf("list task URLs: %w", err)
+	}
+	defer rows.Close()
+	links := make(map[int64][]string)
+	for rows.Next() {
+		var id int64
+		var link string
+		if err := rows.Scan(&id, &link); err != nil {
+			return nil, fmt.Errorf("read task URL: %w", err)
+		}
+		links[id] = append(links[id], link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list task URLs: %w", err)
+	}
+	return links, nil
 }
 
 func (s *store) list(parentID *int64, query *string, includeDone bool) ([]task, error) {

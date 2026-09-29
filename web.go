@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type webApp struct {
 type webPage struct {
 	Roots          []*webTask
 	Count          int
+	DetailID       int64
 	DueStarts      []*webTask
 	DueCompletions []*webTask
 	Query          string
@@ -40,8 +42,12 @@ type webPage struct {
 
 type webTask struct {
 	Task          task
+	URLs          []string
+	ViewID        int64
+	HiddenPeers   int
 	Children      []*webTask
 	ContextOnly   bool
+	StatusRank    int
 	Expanded      bool
 	StartDue      bool
 	CompletionDue bool
@@ -70,9 +76,11 @@ func newWebApp(s *store, host string) (*webApp, error) {
 func (a *webApp) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", a.index)
+	mux.HandleFunc("GET /tasks/{id}", a.detail)
 	mux.HandleFunc("POST /tasks", a.createTask)
 	mux.HandleFunc("POST /tasks/status", a.updateStatus)
 	mux.HandleFunc("POST /tasks/schedule", a.updateSchedule)
+	mux.HandleFunc("POST /tasks/url", a.updateURL)
 	mux.HandleFunc("GET /assets/ui.js", a.uiScript)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.acceptsHost(r.Host) {
@@ -112,15 +120,29 @@ func (a *webApp) index(w http.ResponseWriter, r *http.Request) {
 	a.render(w, r, http.StatusOK, "")
 }
 
+func (a *webApp) detail(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	a.renderDetail(w, r, id, http.StatusOK, "")
+}
+
+func requestedOpenIDs(r *http.Request) map[int64]bool {
+	if values, ok := r.URL.Query()["open"]; ok {
+		return parseOpenIDs(values[0])
+	}
+	if values, ok := r.PostForm["open"]; ok {
+		return parseOpenIDs(values[0])
+	}
+	return nil
+}
+
 func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, message string) {
 	query := strings.TrimSpace(r.FormValue("q"))
 	showAll := r.FormValue("all") == "1"
-	var openIDs map[int64]bool
-	if values, ok := r.URL.Query()["open"]; ok {
-		openIDs = parseOpenIDs(values[0])
-	} else if values, ok := r.PostForm["open"]; ok {
-		openIDs = parseOpenIDs(values[0])
-	}
+	openIDs := requestedOpenIDs(r)
 	tasks, err := a.store.list(nil, nil, true)
 	if err != nil {
 		http.Error(w, "could not load tasks", http.StatusInternalServerError)
@@ -128,6 +150,12 @@ func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, mess
 	}
 	today := localToday()
 	roots, count := buildWebTree(tasks, query, showAll, a.csrfToken, today, openIDs)
+	links, err := a.store.allURLs()
+	if err != nil {
+		http.Error(w, "could not load task URLs", http.StatusInternalServerError)
+		return
+	}
+	attachWebURLs(roots, links)
 	dueStarts, dueCompletions := collectWebDue(roots)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -139,6 +167,85 @@ func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, mess
 		// The template is parsed at startup; an execution error means the response
 		// may already be partially written, so logging is the useful fallback.
 		log.Printf("trackerator: render web page: %v", err)
+	}
+}
+
+func (a *webApp) renderDetail(w http.ResponseWriter, r *http.Request, id int64, status int, message string) {
+	tasks, err := a.store.list(nil, nil, true)
+	if err != nil {
+		http.Error(w, "could not load tasks", http.StatusInternalServerError)
+		return
+	}
+	openIDs := requestedOpenIDs(r)
+	roots, _ := buildWebTree(tasks, "", true, a.csrfToken, localToday(), openIDs)
+	root, count := buildWebDetail(roots, id, openIDs == nil)
+	if root == nil {
+		http.NotFound(w, r)
+		return
+	}
+	links, err := a.store.allURLs()
+	if err != nil {
+		http.Error(w, "could not load task URLs", http.StatusInternalServerError)
+		return
+	}
+	attachWebURLs([]*webTask{root}, links)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := a.template.ExecuteTemplate(w, "index.html", webPage{
+		Roots: []*webTask{root}, Count: count, DetailID: id, Token: a.csrfToken, Error: message,
+	}); err != nil {
+		log.Printf("trackerator: render task detail: %v", err)
+	}
+}
+
+func buildWebDetail(roots []*webTask, id int64, expandAll bool) (*webTask, int) {
+	var countSubtree func(*webTask) int
+	countSubtree = func(node *webTask) int {
+		node.ViewID = id
+		if expandAll {
+			node.Expanded = true
+		}
+		count := 1
+		for _, child := range node.Children {
+			count += countSubtree(child)
+		}
+		return count
+	}
+	var find func(*webTask) (*webTask, int)
+	find = func(node *webTask) (*webTask, int) {
+		if node.Task.ID == id {
+			return node, countSubtree(node)
+		}
+		for _, child := range node.Children {
+			if selected, count := find(child); selected != nil {
+				node.HiddenPeers = len(node.Children) - 1
+				node.Children = []*webTask{selected}
+				node.ContextOnly = true
+				node.Expanded = true
+				node.ViewID = id
+				return node, count + 1
+			}
+		}
+		return nil, 0
+	}
+	for _, root := range roots {
+		if selected, count := find(root); selected != nil {
+			return selected, count
+		}
+	}
+	return nil, 0
+}
+
+func attachWebURLs(roots []*webTask, links map[int64][]string) {
+	var attach func(*webTask)
+	attach = func(node *webTask) {
+		node.URLs = links[node.Task.ID]
+		for _, child := range node.Children {
+			attach(child)
+		}
+	}
+	for _, root := range roots {
+		attach(root)
 	}
 }
 
@@ -190,7 +297,48 @@ func buildWebTree(tasks []task, query string, showAll bool, token, today string,
 			count += nodeCount
 		}
 	}
+	sortWebTasks(displayed)
 	return displayed, count
+}
+
+func statusRank(status string) int {
+	switch status {
+	case "started":
+		return 0
+	case "todo":
+		return 1
+	case "blocked":
+		return 2
+	case "done":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func ownStatusRank(node *webTask) int {
+	if node.ContextOnly {
+		return 4
+	}
+	return statusRank(node.Task.Status)
+}
+
+func sortWebTasks(nodes []*webTask) {
+	for _, node := range nodes {
+		node.StatusRank = ownStatusRank(node)
+		if len(node.Children) > 0 {
+			sortWebTasks(node.Children)
+			if node.Children[0].StatusRank < node.StatusRank {
+				node.StatusRank = node.Children[0].StatusRank
+			}
+		}
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].StatusRank != nodes[j].StatusRank {
+			return nodes[i].StatusRank < nodes[j].StatusRank
+		}
+		return ownStatusRank(nodes[i]) < ownStatusRank(nodes[j])
+	})
 }
 
 func parseOpenIDs(raw string) map[int64]bool {
@@ -244,24 +392,24 @@ func (a *webApp) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	title := strings.TrimSpace(r.PostFormValue("title"))
 	if title == "" {
-		a.render(w, r, http.StatusBadRequest, "Enter a task title.")
+		a.renderPostError(w, r, "Enter a task title.")
 		return
 	}
 	var parentID *int64
 	if raw := r.PostFormValue("parent_id"); raw != "" {
 		id, err := parseID(raw)
 		if err != nil {
-			a.render(w, r, http.StatusBadRequest, err.Error())
+			a.renderPostError(w, r, err.Error())
 			return
 		}
 		parentID = &id
 	}
 	id, err := a.store.addWithSchedule(title, parentID, r.PostFormValue("start_date"), r.PostFormValue("completion_date"))
 	if err != nil {
-		a.render(w, r, http.StatusBadRequest, err.Error())
+		a.renderPostError(w, r, err.Error())
 		return
 	}
-	redirect := listURLForPost(r, "", r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	redirect := postReturnURL(r, "", r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
@@ -271,21 +419,21 @@ func (a *webApp) updateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := parseID(r.PostFormValue("id"))
 	if err != nil {
-		a.render(w, r, http.StatusBadRequest, err.Error())
+		a.renderPostError(w, r, err.Error())
 		return
 	}
 	status := r.PostFormValue("status")
 	switch status {
 	case "todo", "started", "blocked", "done":
 	default:
-		a.render(w, r, http.StatusBadRequest, "Choose a valid status.")
+		a.renderPostError(w, r, "Choose a valid status.")
 		return
 	}
 	if err := a.store.setStatus(id, status); err != nil {
-		a.render(w, r, http.StatusBadRequest, err.Error())
+		a.renderPostError(w, r, err.Error())
 		return
 	}
-	redirect := listURLForPost(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	redirect := postReturnURL(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
@@ -295,20 +443,60 @@ func (a *webApp) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := parseID(r.PostFormValue("id"))
 	if err != nil {
-		a.render(w, r, http.StatusBadRequest, err.Error())
+		a.renderPostError(w, r, err.Error())
 		return
 	}
 	start := r.PostFormValue("start_date")
 	completion := r.PostFormValue("completion_date")
 	if err := a.store.setSchedule(id, &start, &completion); err != nil {
-		a.render(w, r, http.StatusBadRequest, err.Error())
+		a.renderPostError(w, r, err.Error())
 		return
 	}
-	redirect := listURLForPost(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	redirect := postReturnURL(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
-func listURLForPost(r *http.Request, query string, showAll bool) string {
+func (a *webApp) updateURL(w http.ResponseWriter, r *http.Request) {
+	if !a.parsePost(w, r) {
+		return
+	}
+	id, err := parseID(r.PostFormValue("id"))
+	if err != nil {
+		a.renderPostError(w, r, err.Error())
+		return
+	}
+	switch r.PostFormValue("action") {
+	case "add":
+		err = a.store.addURL(id, r.PostFormValue("url"))
+	case "remove":
+		err = a.store.removeURL(id, r.PostFormValue("url"))
+	default:
+		err = fmt.Errorf("choose a valid URL action")
+	}
+	if err != nil {
+		a.renderPostError(w, r, err.Error())
+		return
+	}
+	redirect := postReturnURL(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
+}
+
+func (a *webApp) renderPostError(w http.ResponseWriter, r *http.Request, message string) {
+	if id, err := parseID(r.PostFormValue("view_id")); err == nil {
+		a.renderDetail(w, r, id, http.StatusBadRequest, message)
+		return
+	}
+	a.render(w, r, http.StatusBadRequest, message)
+}
+
+func postReturnURL(r *http.Request, query string, showAll bool) string {
+	if id, err := parseID(r.PostFormValue("view_id")); err == nil {
+		path := "/tasks/" + strconv.FormatInt(id, 10)
+		if values, ok := r.PostForm["open"]; ok {
+			return path + "?" + url.Values{"open": {values[0]}}.Encode()
+		}
+		return path
+	}
 	if values, ok := r.PostForm["open"]; ok {
 		return listURL(query, showAll, values[0])
 	}

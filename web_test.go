@@ -112,6 +112,144 @@ func TestWebTaskWorkflow(t *testing.T) {
 	}
 }
 
+func TestWebTaskURLs(t *testing.T) {
+	s, err := openStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	parent, err := s.add("Parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.add("Child", &parent); err != nil {
+		t.Fatal(err)
+	}
+	a, err := newWebApp(s, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, path string, form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		var body string
+		if form != nil {
+			body = form.Encode()
+		}
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Host = "127.0.0.1:8080"
+		if form != nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		response := httptest.NewRecorder()
+		a.handler().ServeHTTP(response, req)
+		return response
+	}
+	link := "https://example.com/review?a=1&b=2"
+	added := request(http.MethodPost, "/tasks/url", url.Values{
+		"csrf": {a.csrfToken}, "id": {"2"}, "action": {"add"}, "url": {link}, "open": {"1"},
+	})
+	if added.Code != http.StatusSeeOther || added.Header().Get("Location") != "/?open=1#task-2" {
+		t.Fatalf("add URL: status %d, redirect %q", added.Code, added.Header().Get("Location"))
+	}
+	page := request(http.MethodGet, "/?open=1", nil).Body.String()
+	for _, want := range []string{
+		`data-reveal-target="add-url-2"`, `id="add-url-2" hidden`,
+		`href="https://example.com/review?a=1&amp;b=2"`,
+		`name="url" value="https://example.com/review?a=1&amp;b=2"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("task URL page missing %q", want)
+		}
+	}
+	invalid := request(http.MethodPost, "/tasks/url", url.Values{
+		"csrf": {a.csrfToken}, "id": {"2"}, "action": {"add"}, "url": {"javascript:alert(1)"},
+	})
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "invalid URL") {
+		t.Fatalf("invalid URL: status %d, body %q", invalid.Code, invalid.Body.String())
+	}
+	removed := request(http.MethodPost, "/tasks/url", url.Values{
+		"csrf": {a.csrfToken}, "id": {"2"}, "action": {"remove"}, "url": {link}, "open": {"1"},
+	})
+	if removed.Code != http.StatusSeeOther {
+		t.Fatalf("remove URL: status %d, body %q", removed.Code, removed.Body.String())
+	}
+	if page := request(http.MethodGet, "/?open=1", nil).Body.String(); strings.Contains(page, `href="https://example.com/review`) {
+		t.Fatal("removed URL still shown")
+	}
+}
+
+func TestStableTaskPagesShowAncestryWithoutPeers(t *testing.T) {
+	s, err := openStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	root, err := s.add("Root", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := s.add("Chosen child", &root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.add("Root peer", &root); err != nil {
+		t.Fatal(err)
+	}
+	grandchild, err := s.add("Chosen grandchild", &child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.setStatus(grandchild, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.add("Child peer", &child); err != nil {
+		t.Fatal(err)
+	}
+	a, err := newWebApp(s, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, path string, form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		var body string
+		if form != nil {
+			body = form.Encode()
+		}
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Host = "127.0.0.1:8080"
+		if form != nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		response := httptest.NewRecorder()
+		a.handler().ServeHTTP(response, req)
+		return response
+	}
+	index := request(http.MethodGet, "/", nil).Body.String()
+	if !strings.Contains(index, `class="task-id" href="/tasks/1"`) || !strings.Contains(index, `class="task-id" href="/tasks/2"`) {
+		t.Fatal("task IDs should link to stable task pages")
+	}
+	parentPage := request(http.MethodGet, "/tasks/1", nil)
+	if parentPage.Code != http.StatusOK || !strings.Contains(parentPage.Body.String(), "Root peer") || !strings.Contains(parentPage.Body.String(), "Chosen grandchild") || !strings.Contains(parentPage.Body.String(), `data-task-id="1" open`) || !strings.Contains(parentPage.Body.String(), `data-task-id="2" open`) || !strings.Contains(parentPage.Body.String(), "status-done") {
+		t.Fatalf("parent detail: status %d, body %q", parentPage.Code, parentPage.Body.String())
+	}
+	childPage := request(http.MethodGet, "/tasks/2", nil)
+	if childPage.Code != http.StatusOK || !strings.Contains(childPage.Body.String(), "Chosen grandchild") || !strings.Contains(childPage.Body.String(), "Child peer") || strings.Contains(childPage.Body.String(), "Root peer") || !strings.Contains(childPage.Body.String(), `1 other subtask not shown`) || !strings.Contains(childPage.Body.String(), `href="/tasks/1">View all subtasks of #1`) {
+		t.Fatalf("child detail: status %d, body %q", childPage.Code, childPage.Body.String())
+	}
+	grandchildPage := request(http.MethodGet, "/tasks/4", nil)
+	if grandchildPage.Code != http.StatusOK || !strings.Contains(grandchildPage.Body.String(), "Root") || !strings.Contains(grandchildPage.Body.String(), "Chosen child") || strings.Contains(grandchildPage.Body.String(), "Root peer") || strings.Contains(grandchildPage.Body.String(), "Child peer") || !strings.Contains(grandchildPage.Body.String(), "status-done") || !strings.Contains(grandchildPage.Body.String(), `href="/tasks/2">View all subtasks of #2`) {
+		t.Fatalf("grandchild detail: status %d, body %q", grandchildPage.Code, grandchildPage.Body.String())
+	}
+	if response := request(http.MethodGet, "/tasks/999", nil); response.Code != http.StatusNotFound {
+		t.Fatalf("missing task detail: status %d", response.Code)
+	}
+	if response := request(http.MethodPost, "/tasks/status", url.Values{
+		"csrf": {a.csrfToken}, "id": {"4"}, "status": {"started"}, "view_id": {"2"}, "open": {"1,2"},
+	}); response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/tasks/2?open=1%2C2#task-4" {
+		t.Fatalf("detail status redirect: status %d, location %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
 func TestWebTreeKeepsSubtasksUnderFilteredAncestors(t *testing.T) {
 	tasks := []task{
 		{ID: 1, Title: "Finished parent", Status: "done"},
@@ -145,6 +283,88 @@ func TestWebTreeKeepsSubtasksUnderFilteredAncestors(t *testing.T) {
 	roots, count = buildWebTree(tasks, "", true, "token", "2026-09-29", nil)
 	if count != 4 || len(roots[0].Children) != 2 || roots[0].ContextOnly {
 		t.Fatalf("show completed hierarchy = %#v, count = %d", roots, count)
+	}
+}
+
+func TestWebListsSortStatusesWithoutFlatteningSubtasks(t *testing.T) {
+	tasks := []task{
+		{ID: 1, Title: "Work blocked", Status: "blocked"},
+		{ID: 2, Title: "Work todo", Status: "todo"},
+		{ID: 3, Title: "Work started", Status: "started"},
+		{ID: 4, Title: "Work done", Status: "done"},
+		{ID: 5, Title: "Parent", Status: "todo"},
+		{ID: 6, ParentID: sql.NullInt64{Int64: 5, Valid: true}, Title: "Work nested blocked", Status: "blocked"},
+		{ID: 7, ParentID: sql.NullInt64{Int64: 5, Valid: true}, Title: "Work nested started", Status: "started"},
+		{ID: 8, ParentID: sql.NullInt64{Int64: 5, Valid: true}, Title: "Work nested todo", Status: "todo"},
+	}
+	roots, count := buildWebTree(tasks, "work", true, "token", "2026-09-29", nil)
+	if count != 8 {
+		t.Fatalf("search count = %d, want 8", count)
+	}
+	for i, want := range []int64{3, 5, 2, 1, 4} {
+		if roots[i].Task.ID != want {
+			t.Fatalf("search root %d = #%d, want #%d", i, roots[i].Task.ID, want)
+		}
+	}
+	if !roots[1].ContextOnly {
+		t.Fatal("nested matches should retain their parent as context")
+	}
+	for i, want := range []int64{7, 8, 6} {
+		if roots[1].Children[i].Task.ID != want {
+			t.Fatalf("search child %d = #%d, want #%d", i, roots[1].Children[i].Task.ID, want)
+		}
+	}
+	roots, _ = buildWebTree(tasks, "work", false, "token", "2026-09-29", nil)
+	if len(roots) != 4 || roots[0].Task.ID != 3 || roots[3].Task.ID != 1 {
+		t.Fatalf("unfinished search order = %#v", roots)
+	}
+	roots, _ = buildWebTree(tasks, "", true, "token", "2026-09-29", nil)
+	for i, want := range []int64{3, 5, 2, 1, 4} {
+		if roots[i].Task.ID != want {
+			t.Fatalf("unfiltered root %d = #%d, want status order #%d", i, roots[i].Task.ID, want)
+		}
+	}
+}
+
+func TestWebHomeShowsStartedBeforeBlocked(t *testing.T) {
+	s, err := openStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	blocked, err := s.add("Blocked parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.setStatus(blocked, "blocked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.add("Todo subtask", &blocked); err != nil {
+		t.Fatal(err)
+	}
+	started, err := s.add("Started task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.setStatus(started, "started"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := newWebApp(s, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8080"
+	response := httptest.NewRecorder()
+	a.handler().ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("home page status = %d", response.Code)
+	}
+	page := response.Body.String()
+	startedAt := strings.Index(page, `id="task-3"`)
+	blockedAt := strings.Index(page, `id="task-1"`)
+	if startedAt < 0 || blockedAt < 0 || startedAt > blockedAt {
+		t.Fatalf("started task should precede blocked branch: started at %d, blocked at %d", startedAt, blockedAt)
 	}
 }
 

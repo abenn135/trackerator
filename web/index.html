@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trackerator</title>
+  <title>{{if .DetailID}}Task #{{.DetailID}} · {{end}}Trackerator</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f6f4; color: #24332c; }
     * { box-sizing: border-box; }
@@ -38,7 +38,14 @@
     .task-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
     .task-title { margin: 0; font-size: 1.05rem; overflow-wrap: anywhere; }
     .task-id { color: #5a7564; font-weight: 700; margin-right: 8px; }
+    a.task-id { text-decoration: underline; text-underline-offset: 2px; }
+    .peer-hint { margin: 11px 0 0; color: #64766c; font-size: .83rem; }
     .meta { color: #64766c; font-size: .82rem; margin: 7px 0 0; }
+    .task-urls { display: grid; gap: 5px; margin: 10px 0 0; padding-left: 20px; font-size: .86rem; }
+    .task-urls li { overflow-wrap: anywhere; }
+    .task-urls form { display: inline; margin-left: 8px; }
+    .remove-url { border: 0; background: none; color: #8a4225; font-size: .78rem; text-decoration: underline; padding: 0; }
+    .reveal-panel input[type="url"] { width: 100%; min-width: 0; border: 1px solid #bdcfc2; border-radius: 9px; padding: 11px 13px; background: #fff; color: inherit; }
     .date-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
     .date-tag { border: 1px solid #d5dfd7; border-radius: 7px; background: #f3f7f4; color: #4d6856; padding: 5px 8px; font-size: .8rem; }
     .date-tag.due { border-color: #e5b69a; background: #fff0e6; color: #8a4225; font-weight: 700; }
@@ -94,6 +101,9 @@
   </header>
   <main class="wrap">
     {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+    {{if .DetailID}}
+    <p><a href="/">← Back to all tasks</a></p>
+    {{else}}
     <section class="panel" aria-labelledby="new-task-heading">
       <h2 id="new-task-heading">New task</h2>
       <form method="post" action="/tasks">
@@ -130,8 +140,10 @@
       </div>
     </section>
     {{end}}
+    {{end}}
 
     <section class="panel" aria-labelledby="tasks-heading">
+      {{if not .DetailID}}
       <form method="get" action="/" class="filters" role="search">
         <label class="sr-only" for="search">Search task titles</label>
         <input class="search-input" id="search" type="text" name="q" value="{{.Query}}" placeholder="Search task titles">
@@ -139,8 +151,9 @@
         <button type="submit" class="primary">Search</button>
         <a class="clear" href="/">Clear</a>
       </form>
+      {{end}}
       <div class="heading-row">
-        <h2 id="tasks-heading">Tasks</h2>
+        <h2 id="tasks-heading">{{if .DetailID}}Task #{{.DetailID}}{{else}}Tasks{{end}}</h2>
         <span class="count">{{.Count}} shown</span>
       </div>
       {{if .Roots}}
