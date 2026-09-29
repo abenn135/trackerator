@@ -58,9 +58,26 @@ func TestWebTaskWorkflow(t *testing.T) {
 	}
 	page = request(http.MethodGet, "/", nil)
 	if !strings.Contains(page.Body.String(), "Plan &lt;release&gt;") ||
-		!strings.Contains(page.Body.String(), `class="children" aria-label="Subtasks of task 1"`) ||
+		!strings.Contains(page.Body.String(), `class="subtasks" aria-label="Subtasks of task 1" data-task-id="1"`) ||
+		!strings.Contains(page.Body.String(), `data-reveal-target="add-subtask-1"`) ||
+		!strings.Contains(page.Body.String(), `id="add-subtask-1" hidden`) ||
+		!strings.Contains(page.Body.String(), `data-reveal-target="schedule-1"`) ||
+		!strings.Contains(page.Body.String(), `id="schedule-1" hidden`) ||
 		!strings.Contains(page.Body.String(), "Subtask of #1") {
 		t.Fatalf("tasks not shown or escaped: %q", page.Body.String())
+	}
+	if strings.Contains(page.Body.String(), `data-task-id="1" open`) {
+		t.Fatal("subtasks should be collapsed on the default list")
+	}
+	page = request(http.MethodGet, "/?open=1", nil)
+	if !strings.Contains(page.Body.String(), `data-task-id="1" open`) {
+		t.Fatal("URL-selected subtasks should be expanded")
+	}
+	script := request(http.MethodGet, "/assets/ui.js", nil)
+	if script.Code != http.StatusOK || !strings.Contains(script.Header().Get("Content-Type"), "javascript") ||
+		!strings.Contains(script.Body.String(), "openParentSubtasks") ||
+		!strings.Contains(script.Body.String(), `searchParams.set("open", openSubtaskIDs())`) {
+		t.Fatalf("UI script: status %d, content type %q", script.Code, script.Header().Get("Content-Type"))
 	}
 
 	updated := request(http.MethodPost, "/tasks/status", url.Values{"csrf": {a.csrfToken}, "id": {"2"}, "status": {"done"}})
@@ -75,9 +92,20 @@ func TestWebTaskWorkflow(t *testing.T) {
 	if !strings.Contains(page.Body.String(), "Review changes") || !strings.Contains(page.Body.String(), "status-done") {
 		t.Fatal("completed subtask missing from search with show completed")
 	}
-	updated = request(http.MethodPost, "/tasks/status", url.Values{"csrf": {a.csrfToken}, "id": {"2"}, "status": {"started"}, "q": {"review"}, "all": {"1"}})
-	if updated.Code != http.StatusSeeOther || updated.Header().Get("Location") != "/?all=1&q=review" {
+	if !strings.Contains(page.Body.String(), `data-task-id="1" open`) {
+		t.Fatal("search results should expand matching subtask branches")
+	}
+	page = request(http.MethodGet, "/?all=1&q=review&open=", nil)
+	if strings.Contains(page.Body.String(), `data-task-id="1" open`) {
+		t.Fatal("explicitly collapsed subtasks should stay collapsed on search")
+	}
+	updated = request(http.MethodPost, "/tasks/status", url.Values{"csrf": {a.csrfToken}, "id": {"2"}, "status": {"started"}, "q": {"review"}, "all": {"1"}, "open": {"1"}})
+	if updated.Code != http.StatusSeeOther || updated.Header().Get("Location") != "/?all=1&open=1&q=review#task-2" {
 		t.Fatalf("restart subtask: status %d, redirect %q", updated.Code, updated.Header().Get("Location"))
+	}
+	created = request(http.MethodPost, "/tasks", url.Values{"csrf": {a.csrfToken}, "title": {"Another task"}, "open": {""}})
+	if created.Code != http.StatusSeeOther || created.Header().Get("Location") != "/?open=#task-3" {
+		t.Fatalf("create with collapsed state: status %d, redirect %q", created.Code, created.Header().Get("Location"))
 	}
 	if got, err := s.get(2); err != nil || got.Status != "started" {
 		t.Fatalf("subtask status = %q, error = %v", got.Status, err)
@@ -92,7 +120,7 @@ func TestWebTreeKeepsSubtasksUnderFilteredAncestors(t *testing.T) {
 		{ID: 4, ParentID: sql.NullInt64{Int64: 1, Valid: true}, Title: "Finished sibling", Status: "done"},
 	}
 
-	roots, count := buildWebTree(tasks, "", false, "token", "2026-09-29")
+	roots, count := buildWebTree(tasks, "", false, "token", "2026-09-29", nil)
 	if count != 3 || len(roots) != 1 || !roots[0].ContextOnly || roots[0].Task.ID != 1 {
 		t.Fatalf("default roots = %#v, count = %d", roots, count)
 	}
@@ -103,11 +131,18 @@ func TestWebTreeKeepsSubtasksUnderFilteredAncestors(t *testing.T) {
 		t.Fatalf("grandchild not nested: %#v", roots[0].Children[0].Children)
 	}
 
-	roots, count = buildWebTree(tasks, "review", false, "token", "2026-09-29")
+	roots, count = buildWebTree(tasks, "review", false, "token", "2026-09-29", nil)
 	if count != 3 || !roots[0].ContextOnly || !roots[0].Children[0].ContextOnly || roots[0].Children[0].Children[0].ContextOnly {
 		t.Fatalf("search hierarchy = %#v, count = %d", roots, count)
 	}
-	roots, count = buildWebTree(tasks, "", true, "token", "2026-09-29")
+	if !roots[0].Expanded || !roots[0].Children[0].Expanded {
+		t.Fatal("search should expand every ancestor of a matching subtask")
+	}
+	roots, _ = buildWebTree(tasks, "review", false, "token", "2026-09-29", parseOpenIDs("2,garbage,-1"))
+	if roots[0].Expanded || !roots[0].Children[0].Expanded {
+		t.Fatal("explicit URL state should expand only valid selected sections")
+	}
+	roots, count = buildWebTree(tasks, "", true, "token", "2026-09-29", nil)
 	if count != 4 || len(roots[0].Children) != 2 || roots[0].ContextOnly {
 		t.Fatalf("show completed hierarchy = %#v, count = %d", roots, count)
 	}

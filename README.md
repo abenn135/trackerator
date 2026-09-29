@@ -15,6 +15,9 @@ another port. The web interface shares the CLI's SQLite database, so tasks
 created in either place appear in both. It can create tasks and subtasks,
 change their status, search titles, and show completed tasks.
 Subtasks appear nested under their parent tasks, including in search results.
+Use the Subtasks section to expand a task's children; the Add subtask and
+Schedule dates buttons reveal their forms separately. Expanded Subtasks sections
+are reflected in the URL, so reloading or bookmarking the page preserves them.
 Each task can also have optional scheduled start and completion dates. The UI
 highlights tasks ready to start and tasks due for completion at the top of the
 page when their dates are today or earlier.

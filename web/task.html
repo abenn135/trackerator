@@ -32,8 +32,11 @@
       <button type="submit" {{if eq .Task.Status "done"}}disabled{{end}}>Complete</button>
     </form>
   </div>
-  <details>
-    <summary>Add subtask</summary>
+  <div class="reveal-actions">
+    <button type="button" class="reveal-button" data-reveal-target="add-subtask-{{.Task.ID}}" aria-controls="add-subtask-{{.Task.ID}}" aria-expanded="false">Add subtask</button>
+    <button type="button" class="reveal-button" data-reveal-target="schedule-{{.Task.ID}}" aria-controls="schedule-{{.Task.ID}}" aria-expanded="false">Schedule dates</button>
+  </div>
+  <div class="reveal-panel" id="add-subtask-{{.Task.ID}}" hidden>
     <form method="post" action="/tasks">
       <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="parent_id" value="{{.Task.ID}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
       <div class="inline-form">
@@ -46,21 +49,23 @@
         <label>Completion date<input type="date" name="completion_date"></label>
       </div>
     </form>
-  </details>
-  <details>
-    <summary>Schedule dates</summary>
+  </div>
+  <div class="reveal-panel" id="schedule-{{.Task.ID}}" hidden>
     <form method="post" action="/tasks/schedule" class="schedule-form">
       <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
       <label>Start date<input type="date" name="start_date" value="{{.Task.StartDate.String}}"></label>
       <label>Completion date<input type="date" name="completion_date" value="{{.Task.CompletionDate.String}}"></label>
       <button type="submit" class="primary">Save dates</button>
     </form>
-  </details>
+  </div>
   {{end}}
   {{if .Children}}
-  <div class="children" aria-label="Subtasks of task {{.Task.ID}}">
+  <details class="subtasks" aria-label="Subtasks of task {{.Task.ID}}" data-task-id="{{.Task.ID}}" {{if .Expanded}}open{{end}}>
+    <summary>Subtasks ({{len .Children}})</summary>
+    <div class="children">
     {{range .Children}}{{template "task" .}}{{end}}
-  </div>
+    </div>
+  </details>
   {{end}}
 </article>
 {{end}}

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-//go:embed web/*.html
+//go:embed web/*.html web/*.js
 var webFiles embed.FS
 
 type webApp struct {
@@ -42,6 +42,7 @@ type webTask struct {
 	Task          task
 	Children      []*webTask
 	ContextOnly   bool
+	Expanded      bool
 	StartDue      bool
 	CompletionDue bool
 	Query         string
@@ -72,6 +73,7 @@ func (a *webApp) handler() http.Handler {
 	mux.HandleFunc("POST /tasks", a.createTask)
 	mux.HandleFunc("POST /tasks/status", a.updateStatus)
 	mux.HandleFunc("POST /tasks/schedule", a.updateSchedule)
+	mux.HandleFunc("GET /assets/ui.js", a.uiScript)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.acceptsHost(r.Host) {
 			http.Error(w, "invalid host", http.StatusForbidden)
@@ -79,9 +81,19 @@ func (a *webApp) handler() http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a *webApp) uiScript(w http.ResponseWriter, r *http.Request) {
+	script, err := webFiles.ReadFile("web/ui.js")
+	if err != nil {
+		http.Error(w, "could not load UI script", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Write(script)
 }
 
 func (a *webApp) acceptsHost(host string) bool {
@@ -103,13 +115,19 @@ func (a *webApp) index(w http.ResponseWriter, r *http.Request) {
 func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, message string) {
 	query := strings.TrimSpace(r.FormValue("q"))
 	showAll := r.FormValue("all") == "1"
+	var openIDs map[int64]bool
+	if values, ok := r.URL.Query()["open"]; ok {
+		openIDs = parseOpenIDs(values[0])
+	} else if values, ok := r.PostForm["open"]; ok {
+		openIDs = parseOpenIDs(values[0])
+	}
 	tasks, err := a.store.list(nil, nil, true)
 	if err != nil {
 		http.Error(w, "could not load tasks", http.StatusInternalServerError)
 		return
 	}
 	today := localToday()
-	roots, count := buildWebTree(tasks, query, showAll, a.csrfToken, today)
+	roots, count := buildWebTree(tasks, query, showAll, a.csrfToken, today, openIDs)
 	dueStarts, dueCompletions := collectWebDue(roots)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -124,7 +142,7 @@ func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, mess
 	}
 }
 
-func buildWebTree(tasks []task, query string, showAll bool, token, today string) ([]*webTask, int) {
+func buildWebTree(tasks []task, query string, showAll bool, token, today string, openIDs map[int64]bool) ([]*webTask, int) {
 	nodes := make(map[int64]*webTask, len(tasks))
 	for _, t := range tasks {
 		nodes[t.ID] = &webTask{Task: t, Query: query, ShowAll: showAll, Token: token}
@@ -147,6 +165,7 @@ func buildWebTree(tasks []task, query string, showAll bool, token, today string)
 			(search == "" || strings.Contains(strings.ToLower(node.Task.Title), search))
 		filtered := &webTask{
 			Task: node.Task, ContextOnly: !visible,
+			Expanded: (openIDs == nil && query != "") || openIDs[node.Task.ID],
 			StartDue: node.Task.startDue(today), CompletionDue: node.Task.completionDue(today),
 			Query: query, ShowAll: showAll, Token: token,
 		}
@@ -172,6 +191,16 @@ func buildWebTree(tasks []task, query string, showAll bool, token, today string)
 		}
 	}
 	return displayed, count
+}
+
+func parseOpenIDs(raw string) map[int64]bool {
+	ids := make(map[int64]bool)
+	for _, part := range strings.Split(raw, ",") {
+		if id, err := parseID(part); err == nil {
+			ids[id] = true
+		}
+	}
+	return ids
 }
 
 func collectWebDue(roots []*webTask) ([]*webTask, []*webTask) {
@@ -232,7 +261,7 @@ func (a *webApp) createTask(w http.ResponseWriter, r *http.Request) {
 		a.render(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	redirect := listURL("", r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	redirect := listURLForPost(r, "", r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
@@ -256,7 +285,8 @@ func (a *webApp) updateStatus(w http.ResponseWriter, r *http.Request) {
 		a.render(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	http.Redirect(w, r, listURL(r.PostFormValue("q"), r.PostFormValue("all") == "1"), http.StatusSeeOther)
+	redirect := listURLForPost(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
 func (a *webApp) updateSchedule(w http.ResponseWriter, r *http.Request) {
@@ -274,17 +304,27 @@ func (a *webApp) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		a.render(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	redirect := listURL(r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
+	redirect := listURLForPost(r, r.PostFormValue("q"), r.PostFormValue("all") == "1") + "#task-" + strconv.FormatInt(id, 10)
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
-func listURL(query string, showAll bool) string {
+func listURLForPost(r *http.Request, query string, showAll bool) string {
+	if values, ok := r.PostForm["open"]; ok {
+		return listURL(query, showAll, values[0])
+	}
+	return listURL(query, showAll)
+}
+
+func listURL(query string, showAll bool, open ...string) string {
 	values := url.Values{}
 	if query != "" {
 		values.Set("q", query)
 	}
 	if showAll {
 		values.Set("all", "1")
+	}
+	if len(open) != 0 {
+		values.Set("open", open[0])
 	}
 	if len(values) == 0 {
 		return "/"
