@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trackerator</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f6f4; color: #24332c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    a { color: #226649; }
+    .wrap { width: min(980px, calc(100% - 32px)); margin: 0 auto; }
+    header { background: #143d2d; color: #fff; padding: 34px 0 38px; }
+    header .eyebrow { margin: 0 0 8px; color: #addcc0; font-size: .75rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -.045em; line-height: 1.1; }
+    header p { margin: 10px 0 0; color: #d5e8dc; }
+    main { padding: 26px 0 60px; }
+    .panel { background: #fff; border: 1px solid #dce5dd; border-radius: 14px; box-shadow: 0 3px 14px rgba(20, 61, 45, .04); padding: 22px; margin-bottom: 20px; }
+    h2 { margin: 0 0 16px; font-size: 1.2rem; letter-spacing: -.02em; }
+    .inline-form { display: flex; gap: 10px; align-items: center; }
+    .inline-form input[type="text"], .search-input { width: 100%; min-width: 0; border: 1px solid #bdcfc2; border-radius: 9px; padding: 11px 13px; background: #fff; color: inherit; }
+    input:focus-visible, button:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #6bc992; outline-offset: 2px; }
+    .primary { border: 1px solid #176044; border-radius: 9px; background: #176044; color: #fff; padding: 10px 16px; font-weight: 650; white-space: nowrap; }
+    .primary:hover { background: #0f4e36; }
+    .filters { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto auto; gap: 12px; align-items: center; margin-bottom: 24px; }
+    .checkbox { white-space: nowrap; display: inline-flex; gap: 7px; align-items: center; font-size: .9rem; }
+    .checkbox input { accent-color: #176044; }
+    .clear { font-size: .9rem; }
+    .heading-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .count { color: #61766a; font-size: .9rem; font-weight: 500; }
+    .task-list { display: grid; gap: 12px; }
+    .task { border: 1px solid #dce5dd; border-radius: 12px; padding: 17px; background: #fbfdfb; scroll-margin-top: 20px; }
+    .task.context { background: #f6f8f6; border-style: dashed; }
+    .children { display: grid; gap: 12px; margin: 16px 0 0 10px; padding-left: 18px; border-left: 2px solid #c9dccd; }
+    .task-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .task-title { margin: 0; font-size: 1.05rem; overflow-wrap: anywhere; }
+    .task-id { color: #5a7564; font-weight: 700; margin-right: 8px; }
+    .meta { color: #64766c; font-size: .82rem; margin: 7px 0 0; }
+    .date-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+    .date-tag { border: 1px solid #d5dfd7; border-radius: 7px; background: #f3f7f4; color: #4d6856; padding: 5px 8px; font-size: .8rem; }
+    .date-tag.due { border-color: #e5b69a; background: #fff0e6; color: #8a4225; font-weight: 700; }
+    .due-panel { border-color: #e5b69a; background: #fffaf5; }
+    .due-panel h2 { color: #8a4225; }
+    .due-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .due-groups h3 { margin: 0 0 8px; font-size: .95rem; }
+    .due-groups ul { margin: 0; padding-left: 20px; }
+    .due-groups li { margin: 6px 0; overflow-wrap: anywhere; }
+    .due-groups small { color: #715b4a; margin-left: 5px; }
+    .status { display: inline-block; border-radius: 999px; padding: 4px 10px; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
+    .status-todo { background: #e8ece9; color: #475e50; }
+    .status-started { background: #dceafc; color: #275886; }
+    .status-blocked { background: #fff0d8; color: #83541c; }
+    .status-done { background: #e2f4e8; color: #256448; }
+    .actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
+    .actions form { margin: 0; }
+    .actions button { border: 1px solid #cad9ce; border-radius: 7px; background: #fff; color: #24513a; padding: 6px 10px; font-size: .82rem; font-weight: 600; }
+    .actions button:hover:not(:disabled) { background: #e8f3eb; }
+    details { margin-top: 15px; border-top: 1px solid #e0e9e2; padding-top: 13px; }
+    summary { cursor: pointer; color: #246b49; font-size: .88rem; font-weight: 650; width: fit-content; }
+    details .inline-form { margin-top: 12px; }
+    .schedule-form, .create-dates { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 12px; }
+    .schedule-form label, .create-dates label { display: grid; gap: 4px; font-size: .82rem; color: #4d6856; }
+    .schedule-form input[type="date"], .create-dates input[type="date"] { border: 1px solid #bdcfc2; border-radius: 7px; padding: 7px 9px; color: #24332c; background: #fff; }
+    .error { border: 1px solid #dca6a6; background: #fff0f0; color: #812d2d; border-radius: 9px; padding: 12px 14px; margin-bottom: 20px; }
+    .empty { color: #65786c; padding: 28px 0 12px; text-align: center; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    @media (max-width: 650px) {
+      .filters { grid-template-columns: 1fr auto; }
+      .filters .search-input { grid-column: 1 / -1; }
+      .filters .checkbox { grid-column: 1 / -1; }
+      .inline-form { align-items: stretch; flex-direction: column; }
+      .task-top { flex-direction: column-reverse; gap: 8px; }
+      .children { margin-left: 3px; padding-left: 10px; }
+      .due-groups { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">Local workstream tracker</p>
+      <h1>Trackerator</h1>
+      <p>Keep your tasks and subtasks moving.</p>
+    </div>
+  </header>
+  <main class="wrap">
+    {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+    <section class="panel" aria-labelledby="new-task-heading">
+      <h2 id="new-task-heading">New task</h2>
+      <form method="post" action="/tasks">
+        <input type="hidden" name="csrf" value="{{.Token}}">
+        {{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+        <div class="inline-form">
+          <label class="sr-only" for="new-title">Task title</label>
+          <input id="new-title" type="text" name="title" placeholder="What needs doing?" required autofocus>
+          <button type="submit" class="primary">Add task</button>
+        </div>
+        <div class="create-dates">
+          <label>Start date<input type="date" name="start_date"></label>
+          <label>Completion date<input type="date" name="completion_date"></label>
+        </div>
+      </form>
+    </section>
+
+    {{if or .DueStarts .DueCompletions}}
+    <section class="panel due-panel" aria-labelledby="due-heading">
+      <h2 id="due-heading">Due now</h2>
+      <div class="due-groups">
+        {{if .DueStarts}}
+        <div>
+          <h3>Ready to start</h3>
+          <ul>{{range .DueStarts}}<li><a href="#task-{{.Task.ID}}">#{{.Task.ID}} {{.Task.Title}}</a><small>{{.Task.StartDate.String}}</small></li>{{end}}</ul>
+        </div>
+        {{end}}
+        {{if .DueCompletions}}
+        <div>
+          <h3>Completion due</h3>
+          <ul>{{range .DueCompletions}}<li><a href="#task-{{.Task.ID}}">#{{.Task.ID}} {{.Task.Title}}</a><small>{{.Task.CompletionDate.String}}</small></li>{{end}}</ul>
+        </div>
+        {{end}}
+      </div>
+    </section>
+    {{end}}
+
+    <section class="panel" aria-labelledby="tasks-heading">
+      <form method="get" action="/" class="filters" role="search">
+        <label class="sr-only" for="search">Search task titles</label>
+        <input class="search-input" id="search" type="text" name="q" value="{{.Query}}" placeholder="Search task titles">
+        <label class="checkbox"><input type="checkbox" name="all" value="1" {{if .ShowAll}}checked{{end}}>Show completed</label>
+        <button type="submit" class="primary">Search</button>
+        <a class="clear" href="/">Clear</a>
+      </form>
+      <div class="heading-row">
+        <h2 id="tasks-heading">Tasks</h2>
+        <span class="count">{{.Count}} shown</span>
+      </div>
+      {{if .Roots}}
+      <div class="task-list">
+        {{range .Roots}}{{template "task" .}}{{end}}
+      </div>
+      {{else}}
+      <p class="empty">{{if .Query}}No matching tasks.{{else if .ShowAll}}No tasks yet.{{else}}No open tasks. Add one above to get started.{{end}}</p>
+      {{end}}
+    </section>
+  </main>
+</body>
+</html>

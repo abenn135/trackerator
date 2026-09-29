@@ -1,0 +1,66 @@
+{{define "task"}}
+<article class="task{{if .ContextOnly}} context{{end}}" id="task-{{.Task.ID}}">
+  <div class="task-top">
+    <div>
+      <h3 class="task-title"><span class="task-id">#{{.Task.ID}}</span>{{.Task.Title}}</h3>
+      <p class="meta">{{if .Task.ParentID.Valid}}Subtask of #{{.Task.ParentID.Int64}} · {{end}}{{if .ContextOnly}}Parent context · {{end}}Created {{.Task.Created}} UTC</p>
+      {{if or .Task.StartDate.Valid .Task.CompletionDate.Valid}}
+      <div class="date-tags">
+        {{if .Task.StartDate.Valid}}<span class="date-tag{{if .StartDue}} due{{end}}">Start {{.Task.StartDate.String}}{{if .StartDue}} · due now{{end}}</span>{{end}}
+        {{if .Task.CompletionDate.Valid}}<span class="date-tag{{if .CompletionDue}} due{{end}}">Complete by {{.Task.CompletionDate.String}}{{if .CompletionDue}} · due now{{end}}</span>{{end}}
+      </div>
+      {{end}}
+    </div>
+    <span class="status status-{{.Task.Status}}">{{.Task.Status}}</span>
+  </div>
+  {{if not .ContextOnly}}
+  <div class="actions" aria-label="Change status of task {{.Task.ID}}">
+    <form method="post" action="/tasks/status">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="todo"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <button type="submit" {{if eq .Task.Status "todo"}}disabled{{end}}>To do</button>
+    </form>
+    <form method="post" action="/tasks/status">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="started"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <button type="submit" {{if eq .Task.Status "started"}}disabled{{end}}>Start</button>
+    </form>
+    <form method="post" action="/tasks/status">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="blocked"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <button type="submit" {{if eq .Task.Status "blocked"}}disabled{{end}}>Block</button>
+    </form>
+    <form method="post" action="/tasks/status">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="status" value="done"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <button type="submit" {{if eq .Task.Status "done"}}disabled{{end}}>Complete</button>
+    </form>
+  </div>
+  <details>
+    <summary>Add subtask</summary>
+    <form method="post" action="/tasks">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="parent_id" value="{{.Task.ID}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <div class="inline-form">
+        <label class="sr-only" for="subtask-{{.Task.ID}}">New subtask under task {{.Task.ID}}</label>
+        <input id="subtask-{{.Task.ID}}" type="text" name="title" placeholder="New subtask title" required>
+        <button type="submit" class="primary">Add subtask</button>
+      </div>
+      <div class="create-dates">
+        <label>Start date<input type="date" name="start_date"></label>
+        <label>Completion date<input type="date" name="completion_date"></label>
+      </div>
+    </form>
+  </details>
+  <details>
+    <summary>Schedule dates</summary>
+    <form method="post" action="/tasks/schedule" class="schedule-form">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}
+      <label>Start date<input type="date" name="start_date" value="{{.Task.StartDate.String}}"></label>
+      <label>Completion date<input type="date" name="completion_date" value="{{.Task.CompletionDate.String}}"></label>
+      <button type="submit" class="primary">Save dates</button>
+    </form>
+  </details>
+  {{end}}
+  {{if .Children}}
+  <div class="children" aria-label="Subtasks of task {{.Task.ID}}">
+    {{range .Children}}{{template "task" .}}{{end}}
+  </div>
+  {{end}}
+</article>
+{{end}}

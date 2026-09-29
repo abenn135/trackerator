@@ -12,11 +12,13 @@ import (
 )
 
 type task struct {
-	ID       int64
-	ParentID sql.NullInt64
-	Title    string
-	Status   string
-	Created  string
+	ID             int64
+	ParentID       sql.NullInt64
+	Title          string
+	Status         string
+	StartDate      sql.NullString
+	CompletionDate sql.NullString
+	Created        string
 }
 
 type store struct {
@@ -51,6 +53,8 @@ func openStore(home string) (*store, error) {
 			parent_id INTEGER REFERENCES tasks(id),
 			title TEXT NOT NULL CHECK (length(trim(title)) > 0),
 			status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'started', 'blocked', 'done')),
+			start_date TEXT,
+			completion_date TEXT,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		"CREATE INDEX IF NOT EXISTS tasks_parent_id ON tasks(parent_id)",
@@ -60,19 +64,19 @@ func openStore(home string) (*store, error) {
 			return nil, fmt.Errorf("initialize database: %w", err)
 		}
 	}
-	if err := migrateStatus(db); err != nil {
+	if err := migrateTaskColumns(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return &store{db: db}, nil
 }
 
-func migrateStatus(db *sql.DB) error {
+func migrateTaskColumns(db *sql.DB) error {
 	rows, err := db.Query("PRAGMA table_info(tasks)")
 	if err != nil {
 		return err
 	}
-	hasStatus := false
+	columns := make(map[string]bool)
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, columnType string
@@ -81,9 +85,7 @@ func migrateStatus(db *sql.DB) error {
 			rows.Close()
 			return err
 		}
-		if name == "status" {
-			hasStatus = true
-		}
+		columns[name] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -92,22 +94,45 @@ func migrateStatus(db *sql.DB) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if hasStatus {
-		return nil
+	for _, column := range []struct{ name, definition string }{
+		{"status", "status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'started', 'blocked', 'done'))"},
+		{"start_date", "start_date TEXT"},
+		{"completion_date", "completion_date TEXT"},
+	} {
+		if columns[column.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE tasks ADD COLUMN " + column.definition); err != nil {
+			return err
+		}
 	}
-	_, err = db.Exec("ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'started', 'blocked', 'done'))")
-	return err
+	return nil
 }
 
 func (s *store) close() error { return s.db.Close() }
 
 func (s *store) add(title string, parentID *int64) (int64, error) {
+	return s.addWithSchedule(title, parentID, "", "")
+}
+
+func (s *store) addWithSchedule(title string, parentID *int64, start, completion string) (int64, error) {
+	startDate, err := parseScheduleDate(start)
+	if err != nil {
+		return 0, fmt.Errorf("start date: %w", err)
+	}
+	completionDate, err := parseScheduleDate(completion)
+	if err != nil {
+		return 0, fmt.Errorf("completion date: %w", err)
+	}
+	if startDate.Valid && completionDate.Valid && startDate.String > completionDate.String {
+		return 0, fmt.Errorf("completion date must be on or after start date")
+	}
 	if parentID != nil {
 		if _, err := s.get(*parentID); err != nil {
 			return 0, err
 		}
 	}
-	result, err := s.db.Exec("INSERT INTO tasks (parent_id, title) VALUES (?, ?)", parentID, title)
+	result, err := s.db.Exec("INSERT INTO tasks (parent_id, title, start_date, completion_date) VALUES (?, ?, ?, ?)", parentID, title, startDate, completionDate)
 	if err != nil {
 		return 0, fmt.Errorf("add task: %w", err)
 	}
@@ -116,8 +141,8 @@ func (s *store) add(title string, parentID *int64) (int64, error) {
 
 func (s *store) get(id int64) (task, error) {
 	var t task
-	err := s.db.QueryRow("SELECT id, parent_id, title, status, created_at FROM tasks WHERE id = ?", id).
-		Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.Created)
+	err := s.db.QueryRow("SELECT id, parent_id, title, status, start_date, completion_date, created_at FROM tasks WHERE id = ?", id).
+		Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.StartDate, &t.CompletionDate, &t.Created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return task{}, fmt.Errorf("task %d not found", id)
 	}
@@ -125,6 +150,46 @@ func (s *store) get(id int64) (task, error) {
 		return task{}, fmt.Errorf("get task: %w", err)
 	}
 	return t, nil
+}
+
+// A nil date leaves that field unchanged. An empty date clears it.
+func (s *store) setSchedule(id int64, start, completion *string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schedule update: %w", err)
+	}
+	defer tx.Rollback()
+	var startDate, completionDate sql.NullString
+	err = tx.QueryRow("SELECT start_date, completion_date FROM tasks WHERE id = ?", id).Scan(&startDate, &completionDate)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("task %d not found", id)
+	}
+	if err != nil {
+		return fmt.Errorf("get task schedule: %w", err)
+	}
+	if start != nil {
+		startDate, err = parseScheduleDate(*start)
+		if err != nil {
+			return fmt.Errorf("start date: %w", err)
+		}
+	}
+	if completion != nil {
+		completionDate, err = parseScheduleDate(*completion)
+		if err != nil {
+			return fmt.Errorf("completion date: %w", err)
+		}
+	}
+	if startDate.Valid && completionDate.Valid && startDate.String > completionDate.String {
+		return fmt.Errorf("completion date must be on or after start date")
+	}
+	_, err = tx.Exec("UPDATE tasks SET start_date = ?, completion_date = ? WHERE id = ?", startDate, completionDate, id)
+	if err != nil {
+		return fmt.Errorf("update task schedule: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task schedule: %w", err)
+	}
+	return nil
 }
 
 func (s *store) setStatus(id int64, status string) error {
@@ -143,7 +208,7 @@ func (s *store) setStatus(id int64, status string) error {
 }
 
 func (s *store) list(parentID *int64, query *string, includeDone bool) ([]task, error) {
-	statement := "SELECT id, parent_id, title, status, created_at FROM tasks"
+	statement := "SELECT id, parent_id, title, status, start_date, completion_date, created_at FROM tasks"
 	var conditions []string
 	var args []any
 	if parentID != nil {
@@ -169,7 +234,7 @@ func (s *store) list(parentID *int64, query *string, includeDone bool) ([]task, 
 	var tasks []task
 	for rows.Next() {
 		var t task
-		if err := rows.Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.Created); err != nil {
+		if err := rows.Scan(&t.ID, &t.ParentID, &t.Title, &t.Status, &t.StartDate, &t.CompletionDate, &t.Created); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		tasks = append(tasks, t)

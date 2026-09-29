@@ -16,9 +16,11 @@ const usage = `Usage:
   trackerator block ID
   trackerator complete ID
   trackerator done ID
+  trackerator schedule ID [--start DATE|none] [--complete DATE|none]
   trackerator list [-a]
   trackerator show ID
   trackerator search QUERY
+  trackerator serve [-port PORT]
   trackerator help [COMMAND]
 
 Titles and search queries with spaces should be quoted.
@@ -60,11 +62,20 @@ Example: trackerator done 1`,
 	"list": `Usage: trackerator list [-a]
 
 List all tasks in ID order, including subtasks. Each subtask shows its
-parent task's ID. Done tasks are hidden by default; -a includes them.`,
+parent task's ID. Done tasks are hidden by default; -a includes them.
+Tasks due to start or complete today or earlier are called out first.`,
+	"schedule": `Usage: trackerator schedule ID [--start DATE|none] [--complete DATE|none]
+
+Set scheduled start and/or completion dates for a task or subtask. Dates use
+YYYY-MM-DD in your local timezone. Use none to clear a date; omitted dates
+stay unchanged. Provide at least one option. The completion date cannot be
+before the start date.
+
+Example: trackerator schedule 1 --start 2026-10-01 --complete 2026-10-05`,
 	"show": `Usage: trackerator show ID
 
-Show a task's title, status, creation time, parent (if any), and immediate
-subtasks, including completed subtasks.
+Show a task's title, status, scheduled dates, creation time, parent (if any),
+and immediate subtasks, including completed subtasks.
 
 Example: trackerator show 1`,
 	"search": `Usage: trackerator search QUERY
@@ -73,10 +84,16 @@ Find tasks whose titles contain QUERY, ignoring letter case. Results include
 subtasks and show their parent task IDs.
 
 Example: trackerator search "review"`,
+	"serve": `Usage: trackerator serve [-port PORT]
+
+Open the local web interface at http://127.0.0.1:8080. Use -port to choose
+another local port. The web interface uses the same task database as the CLI.
+
+Example: trackerator serve -port 8081`,
 	"help": `Usage: trackerator help [COMMAND]
 
 Show the command overview, or detailed help for add, subtask, list, show,
-search, start, block, complete, done, or help.
+search, start, block, complete, done, schedule, serve, or help.
 
 Example: trackerator help add`,
 }
@@ -103,6 +120,8 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 	var command, title string
 	var id int64
 	var includeDone bool
+	var scheduleStart, scheduleCompletion *string
+	port := 8080
 	switch args[0] {
 	case "add", "search":
 		if len(args) < 2 {
@@ -134,6 +153,39 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 			return errors.New(usage)
 		}
 		command = "list"
+	case "schedule":
+		if len(args) < 4 || len(args)%2 != 0 {
+			return errors.New(usage)
+		}
+		command = "schedule"
+		var err error
+		id, err = parseID(args[1])
+		if err != nil {
+			return err
+		}
+		for i := 2; i < len(args); i += 2 {
+			value := args[i+1]
+			if value == "none" {
+				value = ""
+			}
+			if _, err := parseScheduleDate(value); err != nil {
+				return fmt.Errorf("%s: %w", args[i], err)
+			}
+			switch args[i] {
+			case "--start":
+				if scheduleStart != nil {
+					return errors.New("--start specified more than once")
+				}
+				scheduleStart = &value
+			case "--complete":
+				if scheduleCompletion != nil {
+					return errors.New("--complete specified more than once")
+				}
+				scheduleCompletion = &value
+			default:
+				return fmt.Errorf("unknown schedule option %q", args[i])
+			}
+		}
 	case "show", "start", "block", "complete", "done":
 		if len(args) != 2 {
 			return errors.New(usage)
@@ -147,6 +199,17 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 		if err != nil {
 			return err
 		}
+	case "serve":
+		if len(args) == 3 && args[1] == "-port" {
+			var err error
+			port, err = strconv.Atoi(args[2])
+			if err != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("invalid port %q: expected 1 through 65535", args[2])
+			}
+		} else if len(args) != 1 {
+			return errors.New(usage)
+		}
+		command = "serve"
 	default:
 		return errors.New(usage)
 	}
@@ -162,6 +225,8 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 	defer s.close()
 
 	switch command {
+	case "serve":
+		return serveWeb(s, port, out)
 	case "add":
 		newID, err := s.add(title, nil)
 		if err != nil {
@@ -174,6 +239,11 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 			return err
 		}
 		fmt.Fprintf(out, "Created subtask %d under task %d: %s\n", newID, id, title)
+	case "schedule":
+		if err := s.setSchedule(id, scheduleStart, scheduleCompletion); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Updated schedule for task %d.\n", id)
 	case "list":
 		tasks, err := s.list(nil, nil, includeDone)
 		if err != nil {
@@ -193,6 +263,12 @@ func run(args []string, out io.Writer, userHome func() (string, error)) error {
 		}
 		fmt.Fprintf(out, "Task %d: %s\n", t.ID, t.Title)
 		fmt.Fprintf(out, "Status: %s\n", t.Status)
+		if t.StartDate.Valid {
+			fmt.Fprintf(out, "Scheduled start: %s\n", t.StartDate.String)
+		}
+		if t.CompletionDate.Valid {
+			fmt.Fprintf(out, "Scheduled completion: %s\n", t.CompletionDate.String)
+		}
 		if t.ParentID.Valid {
 			fmt.Fprintf(out, "Parent: %d\n", t.ParentID.Int64)
 		}
@@ -243,15 +319,54 @@ func parseID(value string) (int64, error) {
 }
 
 func printTasks(out io.Writer, tasks []task) {
+	printTasksAt(out, tasks, localToday())
+}
+
+func printTasksAt(out io.Writer, tasks []task, today string) {
 	if len(tasks) == 0 {
 		fmt.Fprintln(out, "No tasks found.")
 		return
 	}
+	var dueLines []string
 	for _, t := range tasks {
+		if t.startDue(today) {
+			dueLines = append(dueLines, fmt.Sprintf("  Start due: #%d %s (%s)", t.ID, t.Title, t.StartDate.String))
+		}
+		if t.completionDue(today) {
+			dueLines = append(dueLines, fmt.Sprintf("  Completion due: #%d %s (%s)", t.ID, t.Title, t.CompletionDate.String))
+		}
+	}
+	if len(dueLines) > 0 {
+		fmt.Fprintln(out, "Due now:")
+		for _, line := range dueLines {
+			fmt.Fprintln(out, line)
+		}
+		fmt.Fprintln(out)
+	}
+	for _, t := range tasks {
+		var details []string
+		if t.StartDate.Valid {
+			label := "start"
+			if t.startDue(today) {
+				label = "START DUE"
+			}
+			details = append(details, fmt.Sprintf("[%s: %s]", label, t.StartDate.String))
+		}
+		if t.CompletionDate.Valid {
+			label := "complete"
+			if t.completionDue(today) {
+				label = "COMPLETE DUE"
+			}
+			details = append(details, fmt.Sprintf("[%s: %s]", label, t.CompletionDate.String))
+		}
+		suffix := ""
+		if len(details) > 0 {
+			suffix = "  " + strings.Join(details, " ")
+		}
 		if t.ParentID.Valid {
-			fmt.Fprintf(out, "%d  [%s]  (under %d)  %s\n", t.ID, t.Status, t.ParentID.Int64, t.Title)
+			fmt.Fprintf(out, "%d  [%s]  (under %d)  %s%s\n", t.ID, t.Status, t.ParentID.Int64, t.Title, suffix)
 		} else {
-			fmt.Fprintf(out, "%d  [%s]  %s\n", t.ID, t.Status, t.Title)
+			fmt.Fprintf(out, "%d  [%s]  %s%s\n", t.ID, t.Status, t.Title, suffix)
 		}
 	}
 }
