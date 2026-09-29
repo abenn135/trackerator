@@ -6,7 +6,8 @@ Over time, the tool will incorporate agent tooling, for example to automatically
 
 ## CLI
 
-Build with `go build -o trackerator .`, or run commands with `go run .`.
+Build with `make` to create `bin/trackerator`, or run commands with `go run .`.
+Run `make test` to check the CLI.
 
 ```text
 trackerator add "Plan release"
