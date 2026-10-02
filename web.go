@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,8 @@ type webApp struct {
 	template    *template.Template
 	csrfToken   string
 	allowedHost string
+	runner      externalRunner
+	agentDeckMu sync.Mutex
 }
 
 type webPage struct {
@@ -42,6 +45,8 @@ type webPage struct {
 
 type webTask struct {
 	Task          task
+	AgentDeck     agentDeckSession
+	CreatedISO    string
 	URLs          []string
 	ViewID        int64
 	HiddenPeers   int
@@ -70,6 +75,7 @@ func newWebApp(s *store, host string) (*webApp, error) {
 		template:    tmpl,
 		csrfToken:   hex.EncodeToString(token),
 		allowedHost: host,
+		runner:      runExternal,
 	}, nil
 }
 
@@ -81,6 +87,7 @@ func (a *webApp) handler() http.Handler {
 	mux.HandleFunc("POST /tasks/status", a.updateStatus)
 	mux.HandleFunc("POST /tasks/schedule", a.updateSchedule)
 	mux.HandleFunc("POST /tasks/url", a.updateURL)
+	mux.HandleFunc("POST /tasks/agent-deck", a.launchAgentDeck)
 	mux.HandleFunc("GET /assets/ui.js", a.uiScript)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.acceptsHost(r.Host) {
@@ -89,7 +96,7 @@ func (a *webApp) handler() http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self' http://127.0.0.1:8420; base-uri 'none'")
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -156,6 +163,12 @@ func (a *webApp) render(w http.ResponseWriter, r *http.Request, status int, mess
 		return
 	}
 	attachWebURLs(roots, links)
+	sessions, err := a.store.allAgentDeckSessions()
+	if err != nil {
+		http.Error(w, "could not load Agent Deck sessions", http.StatusInternalServerError)
+		return
+	}
+	attachAgentDeckSessions(roots, sessions)
 	dueStarts, dueCompletions := collectWebDue(roots)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -189,6 +202,12 @@ func (a *webApp) renderDetail(w http.ResponseWriter, r *http.Request, id int64, 
 		return
 	}
 	attachWebURLs([]*webTask{root}, links)
+	sessions, err := a.store.allAgentDeckSessions()
+	if err != nil {
+		http.Error(w, "could not load Agent Deck sessions", http.StatusInternalServerError)
+		return
+	}
+	attachAgentDeckSessions([]*webTask{root}, sessions)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := a.template.ExecuteTemplate(w, "index.html", webPage{
@@ -271,7 +290,7 @@ func buildWebTree(tasks []task, query string, showAll bool, token, today string,
 		visible := (showAll || node.Task.Status != "done") &&
 			(search == "" || strings.Contains(strings.ToLower(node.Task.Title), search))
 		filtered := &webTask{
-			Task: node.Task, ContextOnly: !visible,
+			Task: node.Task, CreatedISO: createdAtISO(node.Task.Created), ContextOnly: !visible,
 			Expanded: (openIDs == nil && query != "") || openIDs[node.Task.ID],
 			StartDue: node.Task.startDue(today), CompletionDue: node.Task.completionDue(today),
 			Query: query, ShowAll: showAll, Token: token,
@@ -299,6 +318,14 @@ func buildWebTree(tasks []task, query string, showAll bool, token, today string,
 	}
 	sortWebTasks(displayed)
 	return displayed, count
+}
+
+func createdAtISO(created string) string {
+	at, err := time.Parse("2006-01-02 15:04:05", created)
+	if err != nil {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
 }
 
 func statusRank(status string) int {

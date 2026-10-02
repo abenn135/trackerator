@@ -368,6 +368,39 @@ func TestWebHomeShowsStartedBeforeBlocked(t *testing.T) {
 	}
 }
 
+func TestWebCreatedTimestampCarriesUTCForBrowserFormatting(t *testing.T) {
+	s, err := openStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	id, err := s.add("Timezone test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("UPDATE tasks SET created_at = ? WHERE id = ?", "2026-01-01 00:30:00", id); err != nil {
+		t.Fatal(err)
+	}
+	a, err := newWebApp(s, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8080"
+	page := httptest.NewRecorder()
+	a.handler().ServeHTTP(page, req)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `<time class="created-at" datetime="2026-01-01T00:30:00Z">2026-01-01 00:30:00 UTC</time>`) {
+		t.Fatalf("created timestamp markup: status %d, body %q", page.Code, page.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/assets/ui.js", nil)
+	req.Host = "127.0.0.1:8080"
+	script := httptest.NewRecorder()
+	a.handler().ServeHTTP(script, req)
+	if script.Code != http.StatusOK || !strings.Contains(script.Body.String(), "Intl.DateTimeFormat") || !strings.Contains(script.Body.String(), `time.created-at[datetime]`) {
+		t.Fatalf("browser timestamp formatter missing: status %d", script.Code)
+	}
+}
+
 func TestWebSchedulesSubtaskAndHighlightsDueDates(t *testing.T) {
 	s, err := openStore(t.TempDir())
 	if err != nil {

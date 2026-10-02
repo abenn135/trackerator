@@ -6,6 +6,18 @@ function openParentSubtasks(task) {
   }
 }
 
+const localTimestampFormatter = new Intl.DateTimeFormat(undefined, {
+  year: "numeric", month: "short", day: "numeric",
+  hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+});
+
+for (const timestamp of document.querySelectorAll("time.created-at[datetime]")) {
+  const date = new Date(timestamp.getAttribute("datetime"));
+  if (!Number.isNaN(date.getTime())) {
+    timestamp.textContent = localTimestampFormatter.format(date);
+  }
+}
+
 function openSubtaskIDs() {
   return Array.from(document.querySelectorAll("details.subtasks[data-task-id]"))
     .filter((section) => section.open)

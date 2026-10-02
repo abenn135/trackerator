@@ -24,7 +24,8 @@ type task struct {
 }
 
 type store struct {
-	db *sql.DB
+	db   *sql.DB
+	home string
 }
 
 func openStore(home string) (*store, error) {
@@ -65,6 +66,13 @@ func openStore(home string) (*store, error) {
 			url TEXT NOT NULL,
 			PRIMARY KEY (task_id, url)
 		)`,
+		`CREATE TABLE IF NOT EXISTS task_agent_deck (
+			task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+			session_title TEXT NOT NULL,
+			workspace_path TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			repo_url TEXT NOT NULL DEFAULT ''
+		)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			db.Close()
@@ -75,7 +83,7 @@ func openStore(home string) (*store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
-	return &store{db: db}, nil
+	return &store{db: db, home: home}, nil
 }
 
 func migrateTaskColumns(db *sql.DB) error {

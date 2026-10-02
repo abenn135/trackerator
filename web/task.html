@@ -3,7 +3,7 @@
   <div class="task-top">
     <div>
       <h3 class="task-title"><a class="task-id" href="/tasks/{{.Task.ID}}" aria-label="Stable link to task {{.Task.ID}}">#{{.Task.ID}}</a>{{.Task.Title}}</h3>
-      <p class="meta">{{if .Task.ParentID.Valid}}Subtask of #{{.Task.ParentID.Int64}} · {{end}}{{if .ContextOnly}}Parent context · {{end}}Created {{.Task.Created}} UTC</p>
+      <p class="meta">{{if .Task.ParentID.Valid}}Subtask of #{{.Task.ParentID.Int64}} · {{end}}{{if .ContextOnly}}Parent context · {{end}}Created <time class="created-at" datetime="{{.CreatedISO}}">{{.Task.Created}} UTC</time></p>
       {{if .HiddenPeers}}<p class="peer-hint">{{.HiddenPeers}} other {{if eq .HiddenPeers 1}}subtask{{else}}subtasks{{end}} not shown. <a href="/tasks/{{.Task.ID}}">View all subtasks of #{{.Task.ID}}</a>.</p>{{end}}
       {{if or .Task.StartDate.Valid .Task.CompletionDate.Valid}}
       <div class="date-tags">
@@ -42,7 +42,23 @@
     <button type="button" class="reveal-button" data-reveal-target="add-subtask-{{.Task.ID}}" aria-controls="add-subtask-{{.Task.ID}}" aria-expanded="false">Add subtask</button>
     <button type="button" class="reveal-button" data-reveal-target="schedule-{{.Task.ID}}" aria-controls="schedule-{{.Task.ID}}" aria-expanded="false">Schedule dates</button>
     <button type="button" class="reveal-button" data-reveal-target="add-url-{{.Task.ID}}" aria-controls="add-url-{{.Task.ID}}" aria-expanded="false">Add URL</button>
+    {{if .AgentDeck.Title}}<a class="reveal-button" href="http://127.0.0.1:8420/" target="_blank" rel="noopener noreferrer">Open Agent Deck</a>{{else}}<button type="button" class="reveal-button" data-reveal-target="agent-deck-{{.Task.ID}}" aria-controls="agent-deck-{{.Task.ID}}" aria-expanded="false">Agent Deck</button>{{end}}
   </div>
+  {{if .AgentDeck.Title}}
+  <p class="meta">Agent Deck session: {{.AgentDeck.Title}} · {{.AgentDeck.Tool}} · {{.AgentDeck.Workspace}}</p>
+  {{else}}
+  <div class="reveal-panel" id="agent-deck-{{.Task.ID}}" hidden>
+    <form method="post" action="/tasks/agent-deck" target="_blank">
+      <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="id" value="{{.Task.ID}}"><input type="hidden" name="q" value="{{.Query}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}
+      <div class="schedule-form">
+        <label>Session type<select name="tool"><option value="shell">Shell</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+        <label>Git repo URL (optional)<input type="text" name="repo_url" placeholder="https://github.com/owner/repo.git"></label>
+        <button type="submit" class="primary">Create session and open Agent Deck</button>
+      </div>
+      <p class="meta">Without a repo, the session opens in ~/.trackerator/workspaces/task-{{.Task.ID}}, where you can clone repositories yourself. A repo URL clones into that task's workspace. Requires Agent Deck and its web UI running locally on port 8420.</p>
+    </form>
+  </div>
+  {{end}}
   <div class="reveal-panel" id="add-subtask-{{.Task.ID}}" hidden>
     <form method="post" action="/tasks">
       <input type="hidden" name="csrf" value="{{.Token}}"><input type="hidden" name="parent_id" value="{{.Task.ID}}">{{if .ShowAll}}<input type="hidden" name="all" value="1">{{end}}{{if .ViewID}}<input type="hidden" name="view_id" value="{{.ViewID}}">{{end}}

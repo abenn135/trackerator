@@ -66,7 +66,7 @@
     .actions button { border: 1px solid #cad9ce; border-radius: 7px; background: #fff; color: #24513a; padding: 6px 10px; font-size: .82rem; font-weight: 600; }
     .actions button:hover:not(:disabled) { background: #e8f3eb; }
     .reveal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
-    .reveal-button { border: 1px solid #a9c8b2; border-radius: 8px; background: #ecf5ee; color: #24513a; padding: 7px 11px; font-size: .85rem; font-weight: 650; }
+    .reveal-button { display: inline-block; border: 1px solid #a9c8b2; border-radius: 8px; background: #ecf5ee; color: #24513a; padding: 7px 11px; font-size: .85rem; font-weight: 650; text-decoration: none; }
     .reveal-button:hover, .reveal-button[aria-expanded="true"] { background: #dceee0; }
     .reveal-panel { margin-top: 12px; border: 1px solid #d8e5da; border-radius: 9px; background: #fff; padding: 13px; }
     [hidden] { display: none !important; }
@@ -76,7 +76,7 @@
     .reveal-panel .inline-form { margin-top: 0; }
     .schedule-form, .create-dates { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 12px; }
     .schedule-form label, .create-dates label { display: grid; gap: 4px; font-size: .82rem; color: #4d6856; }
-    .schedule-form input[type="date"], .create-dates input[type="date"] { border: 1px solid #bdcfc2; border-radius: 7px; padding: 7px 9px; color: #24332c; background: #fff; }
+    .schedule-form input, .schedule-form select, .create-dates input[type="date"] { border: 1px solid #bdcfc2; border-radius: 7px; padding: 7px 9px; color: #24332c; background: #fff; }
     .error { border: 1px solid #dca6a6; background: #fff0f0; color: #812d2d; border-radius: 9px; padding: 12px 14px; margin-bottom: 20px; }
     .empty { color: #65786c; padding: 28px 0 12px; text-align: center; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
